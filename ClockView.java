@@ -10,6 +10,10 @@ import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.EnumSet;
+
 /**
  * Created by Amadey on 10/18/2018.
  */
@@ -20,14 +24,16 @@ public class ClockView extends View {
     private static final int DEGREES_IN_CIRCLE = 360;
     private static final int TEXT_SIZE = 7;
     private static final int EVERY_NTH_BIG_MINUTE = 5;
+    private static final int STARTING_ANGLE_FOR_CIRCLE_DRAWING = -90;
     private boolean isZoomNeeded = false;
-    private boolean isLineDrawn = false;
-    private float alpha;
+    private RunningClockElementDrawTypes chosenRunningClockElementDrawType = RunningClockElementDrawTypes.ARC;
+    private float[] alphas = new float[2];
     private RectF rect = new RectF();
     private RectF innerRect = new RectF();
-    private Paint arcPaint = new Paint();
+    private Paint runningMinutePaint = new Paint();
     private Paint circlePaint = new Paint();
-    private Paint paintOfMinute = new Paint();
+    private Paint clockElementPaint = new Paint();
+    private Paint runningHourPaint = new Paint();
     private Paint textPaint = new Paint();
     private Point canvasCenter = new Point();
     private Point zoomInPoint = new Point();
@@ -36,6 +42,8 @@ public class ClockView extends View {
     private Radius radius = new Radius();
     private ClockElements currentlyChosenClockElement = ClockElements.HOUR;
     private String zoomInText;
+    private ArrayList<ClockElements> clockElements = new ArrayList<>(EnumSet.allOf(ClockElements.class));
+    private ArrayList<Paint> runningClockElementsPaints = new ArrayList<>(Arrays.asList(runningMinutePaint, runningHourPaint));
 
     public ClockView(Context context) {
         super(context);
@@ -52,9 +60,10 @@ public class ClockView extends View {
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        arcPaint.setColor(Color.parseColor("#d06383"));
+        runningMinutePaint.setColor(Color.parseColor("#fff4e2"));
         circlePaint.setColor(Color.parseColor("#63367b"));
-        paintOfMinute.setColor(Color.parseColor("#ffedb8"));
+        clockElementPaint.setColor(Color.parseColor("#ffedb8"));
+        runningHourPaint.setColor(Color.parseColor("#d06383"));
         textPaint.setColor(Color.BLACK);
         float pixelDensity = getContext().getResources().getDisplayMetrics().density;
         textPaint.setTextSize(pixelDensity * TEXT_SIZE);
@@ -65,9 +74,10 @@ public class ClockView extends View {
         super.onDetachedFromWindow();
         rect = null;
         innerRect = null;
-        arcPaint = null;
+        runningMinutePaint = null;
         circlePaint = null;
-        paintOfMinute = null;
+        clockElementPaint = null;
+        runningHourPaint = null;
         textPaint = null;
         canvasCenter = null;
         zoomInPoint = null;
@@ -75,6 +85,10 @@ public class ClockView extends View {
         pointOfTouch = null;
         radius.destroy();
         radius = null;
+        clockElements.clear();
+        clockElements = null;
+        runningClockElementsPaints.clear();
+        runningClockElementsPaints = null;
     }
 
     @Override
@@ -101,7 +115,7 @@ public class ClockView extends View {
         rect.set(newLeft, newTop, newRight, newBottom);
     }
 
-    private void setAppropriateRectForInnerCircle(Point center, int radius){
+    private void setAppropriateRectForInnerCircle(Point center, int radius) {
         int newLeft = center.getX() - radius;
         int newTop = center.getY() - radius;
         int newRight = center.getX() + radius;
@@ -118,8 +132,8 @@ public class ClockView extends View {
         radius.setRect(rect);
     }
 
-    private int getAmountOfClockElements(ClockElements clockElement){
-        switch (clockElement){
+    private int getAmountOfClockElements(ClockElements clockElement) {
+        switch (clockElement) {
             case HOUR:
                 return NUMBER_OF_HOURS;
             case MINUTE:
@@ -129,43 +143,62 @@ public class ClockView extends View {
         }
     }
 
-    /*
-    Draws a circle for a main clock view and a special arc that shows currently chosen hour/minute element.
-     */
-    private void drawCircleForClock(Canvas canvas, boolean isLineDrawn, ClockElements clockElement, Radius radius) {
-        canvas.drawArc(rect, -90, 360, true, circlePaint);
-        if (!isLineDrawn) {
-            setAppropriateRectForInnerCircle(canvasCenter, radius.getRadiusOfInnerCircleForClockElement(clockElement));
-            canvas.drawArc(innerRect, -90, alpha, true, arcPaint);
-        } else {
-            canvas.drawLine(canvasCenter.x, canvasCenter.y,
-                    getCoordinateAroundClockCenter(Coordinates.X, alpha, currentlyChosenClockElement, radius),
-                    getCoordinateAroundClockCenter(Coordinates.Y, alpha, currentlyChosenClockElement, radius), arcPaint);
+    private void drawRunningClockArc(Canvas canvas, float angle, int radius, Paint runningClockElementPaint) {
+        setAppropriateRectForInnerCircle(canvasCenter, radius);
+        canvas.drawArc(innerRect, STARTING_ANGLE_FOR_CIRCLE_DRAWING, angle, true, runningClockElementPaint);
+    }
+
+    private void drawRunningClockLine(Canvas canvas, float angle, int radius, Paint runningClockElementPaint) {
+        canvas.drawLine(canvasCenter.x, canvasCenter.y,
+                getCoordinateAroundClockCenter(Coordinates.X, angle, radius),
+                getCoordinateAroundClockCenter(Coordinates.Y, angle, radius), runningClockElementPaint);
+    }
+
+    private void drawRunningClockElement(Canvas canvas, float angle, int radius, Paint runningClockElementPaint, RunningClockElementDrawTypes runningClockElementDrawType) {
+        switch (runningClockElementDrawType) {
+            case ARC:
+                drawRunningClockArc(canvas, angle, radius, runningClockElementPaint);
+                break;
+            case LINE:
+                drawRunningClockLine(canvas, angle, radius, runningClockElementPaint);
         }
     }
 
-    private void setCenterPointOfCurrentlyDrawnClockElement(ClockElements clockElement, Radius radius, Point point){
+    private void drawClock(Canvas canvas, float angles[], Radius radius, ArrayList<ClockElements> clockElements, ArrayList<Paint> runningClockElementsPaints, RunningClockElementDrawTypes runningClockElementDrawType) {
+        canvas.drawArc(rect, STARTING_ANGLE_FOR_CIRCLE_DRAWING, DEGREES_IN_CIRCLE, true, circlePaint);
+        for (int i = 0; i < angles.length; i++) {
+            drawRunningClockElement(canvas, angles[i], radius.getRadiusOfInnerCircleForClockElement(clockElements.get(i)), runningClockElementsPaints.get(i), runningClockElementDrawType);
+        }
+    }
+
+    private void setCenterPointOfCurrentlyDrawnClockElement(ClockElements clockElement, Radius radius, Point point) {
         int x = canvasCenter.getX();
         int y = canvasCenter.getY() - radius.getRadiusOfInnerCircleForClockElement(clockElement);
         point.setXY(x, y);
     }
 
-    private boolean isBigMinuteCircleNeeded(int i){
+    private boolean isBigMinuteCircleNeeded(int i) {
         return i % EVERY_NTH_BIG_MINUTE == 0;
     }
 
-    private void drawRotatedClockElements(Canvas canvas, Radius radius, ClockElements clockElement){
+    private void drawTimeLabelsOfWatchFaceByClockElement(Canvas canvas, Radius radius, ClockElements clockElement, Point centerOfCurrentlyDrawnClockElement) {
         int amountOfElements = getAmountOfClockElements(clockElement);
         float angle = DEGREES_IN_CIRCLE / amountOfElements;
         setCenterPointOfCurrentlyDrawnClockElement(clockElement, radius, centerOfCurrentlyDrawnClockElement);
         int radiusForClockElement;
         canvas.save();
-        for(int i = 1; i <= amountOfElements; i++){
+        for (int i = 1; i <= amountOfElements; i++) {
             canvas.rotate(angle, canvasCenter.getX(), canvasCenter.getY());
             radiusForClockElement = radius.getRadiusForClockElements(clockElement, isBigMinuteCircleNeeded(i));
-            canvas.drawCircle(centerOfCurrentlyDrawnClockElement.getX(), centerOfCurrentlyDrawnClockElement.getY(), radiusForClockElement, paintOfMinute);
+            canvas.drawCircle(centerOfCurrentlyDrawnClockElement.getX(), centerOfCurrentlyDrawnClockElement.getY(), radiusForClockElement, clockElementPaint);
         }
         canvas.restore();
+    }
+
+    private void drawTimeLabelsOfWatchFace(Canvas canvas, Radius radius, ArrayList<ClockElements> clockElements, Point centerOfCurrentlyDrawnClockElement) {
+        for (ClockElements clockElement : clockElements) {
+            drawTimeLabelsOfWatchFaceByClockElement(canvas, radius, clockElement, centerOfCurrentlyDrawnClockElement);
+        }
     }
 
     private Rect getTextBounds(String text) {
@@ -180,24 +213,18 @@ public class ClockView extends View {
     }
 
     private void zoomInOnElement(Canvas canvas, Radius radius) {
-        canvas.drawCircle(zoomInPoint.getX(), zoomInPoint.getY(), radius.getZoomingCircleRadius(), paintOfMinute);
+        canvas.drawCircle(zoomInPoint.getX(), zoomInPoint.getY(), radius.getZoomingCircleRadius(), clockElementPaint);
         textPaint.setTextAlign(Paint.Align.CENTER);
         int x = zoomInPoint.getX();
         int y = zoomInPoint.getY() + (getHeightOfText(zoomInText) / 2);
         canvas.drawText(zoomInText, x, y, textPaint);
     }
 
-    public void setLineOrArc(boolean isLineDrawn) {
-        this.isLineDrawn = isLineDrawn;
-        invalidate();
-    }
-
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        drawCircleForClock(canvas, isLineDrawn, currentlyChosenClockElement, radius);
-        drawRotatedClockElements(canvas, radius, ClockElements.MINUTE);
-        drawRotatedClockElements(canvas, radius, ClockElements.HOUR);
+        drawClock(canvas, alphas, radius, clockElements, runningClockElementsPaints, chosenRunningClockElementDrawType);
+        drawTimeLabelsOfWatchFace(canvas, radius, clockElements, centerOfCurrentlyDrawnClockElement);
         if (isZoomNeeded) {
             zoomInOnElement(canvas, radius);
         }
@@ -231,9 +258,9 @@ public class ClockView extends View {
         return nearestValue * angleBetweenContiguousElements;
     }
 
-    private double calculateTrigonometricValueOfAngle(Coordinates coordinate, float angle){
+    private double calculateTrigonometricValueOfAngle(Coordinates coordinate, float angle) {
         double angleInRads = Math.toRadians(angle);
-        switch (coordinate){
+        switch (coordinate) {
             case X:
                 return Math.sin(angleInRads);
             case Y:
@@ -243,8 +270,8 @@ public class ClockView extends View {
         }
     }
 
-    private int getAngleCoordinateSign(Coordinates coordinate){
-        switch (coordinate){
+    private int getAngleCoordinateSign(Coordinates coordinate) {
+        switch (coordinate) {
             case X:
                 return 1;
             case Y:
@@ -254,15 +281,14 @@ public class ClockView extends View {
         }
     }
 
-    private int getCoordinateAroundClockCenter(Coordinates coordinate, float angle, ClockElements clockElement, Radius radius){
+    private int getCoordinateAroundClockCenter(Coordinates coordinate, float angle, int radius) {
         double trigonometricValueOfAngle = calculateTrigonometricValueOfAngle(coordinate, angle);
-        int radiusOfInnerCircleForClockElement = radius.getRadiusOfInnerCircleForClockElement(clockElement);
-        int coordinateAroundCenter = (int) (trigonometricValueOfAngle * radiusOfInnerCircleForClockElement);
+        int coordinateAroundCenter = (int) (trigonometricValueOfAngle * radius);
         return canvasCenter.getCoordinate(coordinate) + (getAngleCoordinateSign(coordinate) * coordinateAroundCenter);
     }
 
-    private int normalizeCurrentClockElement(ClockElements clockElement, int currentClockElement){
-        switch (clockElement){
+    private int normalizeCurrentClockElement(ClockElements clockElement, int currentClockElement) {
+        switch (clockElement) {
             case HOUR:
                 return currentClockElement == NUMBER_OF_HOURS ? 0 : currentClockElement;
             case MINUTE:
@@ -283,11 +309,11 @@ public class ClockView extends View {
         int normalizedX = pointOfTouch.getX() - canvasCenter.getX();
         int normalizedY = pointOfTouch.getY() - canvasCenter.getY();
         double length = Math.sqrt(normalizedX * normalizedX + normalizedY * normalizedY);
-        if(radius.getRadiusOfInnerHourCircle() >= length){
+        if (radius.getRadiusOfInnerHourCircle() >= length) {
             return ClockElements.HOUR;
-        }else if(radius.getRadiusOfInnerHourCircle() < length){
+        } else if (radius.getRadiusOfInnerHourCircle() < length) {
             return ClockElements.MINUTE;
-        }else{
+        } else {
             return null;
         }
     }
@@ -300,23 +326,33 @@ public class ClockView extends View {
                 isZoomNeeded = true;
                 currentlyChosenClockElement = clockElementChosen(pointOfTouch, radius);
             case MotionEvent.ACTION_MOVE:
-                alpha = roundAngleToNearestClockElement(getAngleAroundClockCenter(pointOfTouch.getX(), pointOfTouch.getY()), currentlyChosenClockElement);
-                zoomInPoint.setXY(getCoordinateAroundClockCenter(Coordinates.X, alpha, currentlyChosenClockElement, radius),
-                        getCoordinateAroundClockCenter(Coordinates.Y, alpha, currentlyChosenClockElement, radius));
-                zoomInText = String.valueOf(getCurrentClockElementByAngle(alpha, currentlyChosenClockElement));
+                alphas[clockElements.indexOf(currentlyChosenClockElement)] = roundAngleToNearestClockElement(getAngleAroundClockCenter(pointOfTouch.getX(), pointOfTouch.getY()), currentlyChosenClockElement);
+                zoomInPoint.setXY(
+                        getCoordinateAroundClockCenter(Coordinates.X, alphas[clockElements.indexOf(currentlyChosenClockElement)],
+                                radius.getRadiusOfInnerCircleForClockElement(currentlyChosenClockElement)),
+                        getCoordinateAroundClockCenter(Coordinates.Y, alphas[clockElements.indexOf(currentlyChosenClockElement)],
+                                radius.getRadiusOfInnerCircleForClockElement(currentlyChosenClockElement)));
+                zoomInText = String.valueOf(getCurrentClockElementByAngle(alphas[clockElements.indexOf(currentlyChosenClockElement)], currentlyChosenClockElement));
                 break;
             case MotionEvent.ACTION_UP:
                 isZoomNeeded = false;
                 currentlyChosenClockElement = ClockElements.MINUTE;
-                alpha = 0.0f;
                 break;
         }
         invalidate();
         return true;
     }
 
+    public void setLineOrArc(boolean isLineDrawn) {
+        if (isLineDrawn) {
+            chosenRunningClockElementDrawType = RunningClockElementDrawTypes.LINE;
+        }
+        invalidate();
+    }
+
     public void setTime(int currentHour, int currentMinute) {
-        // to be added
+        alphas[clockElements.indexOf(ClockElements.HOUR)] = currentHour * (DEGREES_IN_CIRCLE / getAmountOfClockElements(ClockElements.HOUR));
+        alphas[clockElements.indexOf(ClockElements.MINUTE)] = currentMinute * (DEGREES_IN_CIRCLE / getAmountOfClockElements(ClockElements.MINUTE));
     }
 
     private class Point {
@@ -348,8 +384,8 @@ public class ClockView extends View {
             return y;
         }
 
-        int getCoordinate(Coordinates coordinate){
-            switch (coordinate){
+        int getCoordinate(Coordinates coordinate) {
+            switch (coordinate) {
                 case X:
                     return x;
                 case Y:
@@ -419,8 +455,8 @@ public class ClockView extends View {
             return (int) (rect.width() / 25);
         }
 
-        int getRadiusForClockElements(ClockElements clockElement, boolean drawBigMinuteRadius){
-            switch (clockElement){
+        int getRadiusForClockElements(ClockElements clockElement, boolean drawBigMinuteRadius) {
+            switch (clockElement) {
                 case HOUR:
                     return getHourRadius();
                 case MINUTE:
@@ -430,8 +466,8 @@ public class ClockView extends View {
             }
         }
 
-        private int getRadiusOfInnerCircleForClockElement(ClockElements clockElement){
-            switch (clockElement){
+        private int getRadiusOfInnerCircleForClockElement(ClockElements clockElement) {
+            switch (clockElement) {
                 case HOUR:
                     return getRadiusOfInnerHourCircle();
                 case MINUTE:
@@ -441,21 +477,27 @@ public class ClockView extends View {
             }
         }
 
-        private void destroy(){
+        private void destroy() {
             rect = null;
         }
 
     }
 
-    private enum ClockElements{
+    private enum ClockElements {
 
         HOUR, MINUTE
 
     }
 
-    private enum Coordinates{
+    private enum Coordinates {
 
         X, Y
+
+    }
+
+    private enum RunningClockElementDrawTypes {
+
+        ARC, LINE
 
     }
 
